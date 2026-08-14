@@ -1,0 +1,29 @@
+name: Finance Hours Reconciliation
+
+on:
+  schedule:
+    - cron: '0 12 * * 3'   # Every Wednesday at 9am BRT (12:00 UTC)
+  workflow_dispatch:         # Allow manual trigger for testing
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests openpyxl google-auth google-api-python-client
+
+      - name: Run reconciliation
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GITHUB_PAT:                  ${{ secrets.FINANCE_GITHUB_PAT }}
+          GCHAT_WEBHOOK:               ${{ secrets.GCHAT_WEBHOOK }}
+        run: python scripts/finance_hours.py
