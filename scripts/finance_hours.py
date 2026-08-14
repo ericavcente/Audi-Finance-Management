@@ -77,12 +77,31 @@ ORANGE = {"red": 1.0, "green": round(109/255, 6), "blue": round(1/255, 6)}
 # ── AUTH ──────────────────────────────────────────────────────────────────────
 
 def get_sheets_service():
-    key_json = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
-    creds = service_account.Credentials.from_service_account_info(
-        json.loads(key_json),
-        scopes=["https://www.googleapis.com/auth/spreadsheets"]
+    key_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+
+    # Fallback: short-lived OAuth token for testing (set GOOGLE_OAUTH_TOKEN secret)
+    oauth_token = os.environ.get("GOOGLE_OAUTH_TOKEN", "").strip()
+
+    if key_json:
+        try:
+            creds = service_account.Credentials.from_service_account_info(
+                json.loads(key_json),
+                scopes=["https://www.googleapis.com/auth/spreadsheets"]
+            )
+            return build("sheets", "v4", credentials=creds, cache_discovery=False)
+        except Exception as e:
+            print(f"[WARN] Service account auth failed: {e}")
+
+    if oauth_token:
+        from google.oauth2.credentials import Credentials as OAuthCreds
+        creds = OAuthCreds(token=oauth_token)
+        return build("sheets", "v4", credentials=creds, cache_discovery=False)
+
+    raise RuntimeError(
+        "No valid Google credentials found.\n"
+        "Set GOOGLE_SERVICE_ACCOUNT_JSON (service account key JSON) — permanent.\n"
+        "Or set GOOGLE_OAUTH_TOKEN for temporary testing (expires in ~1h)."
     )
-    return build("sheets", "v4", credentials=creds, cache_discovery=False)
 
 
 def get_github_token():
