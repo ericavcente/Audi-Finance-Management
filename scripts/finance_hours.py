@@ -28,12 +28,25 @@ TEAMS = [
         "alloc_key":    "Audi of America.Shopping_Tools_Transactions-High_Value",
         "leave_sheet":  "1JgQG1vZ6k0G9LxiwBlTkBVZnziqlnYt0W3E069dgmSE",
         "leave_tab":    "2026_LEAVE",
+        # Explicit roster: leave sheet has no Location column, so auto-detect fails
+        "roster": [
+            {"name": "Samla Gorza Borges",                   "login": "samla",           "loc": "CPS - Campinas"},
+            {"name": "Larissa Virginia Dos Santos Pinheiro", "login": "lpinheiro",        "loc": "CPS - Campinas"},
+            {"name": "Bryan Tovar",                          "login": "bryan.tovar",      "loc": "COL - Medellin"},
+            {"name": "James Gutierrez",                      "login": "james.gutierrez",  "loc": "COL - Medellin"},
+            {"name": "Tim Pepper",                           "login": "tim.pepper",       "loc": "US"},
+        ],
     },
     {
         "name":         "Charging",
         "alloc_key":    "Audi of America.Charging-High_Value",
         "leave_sheet":  "11WN88HrRW_GAyrAMY-3p3PHL2im0yu9BUjDX2eUFnCs",
         "leave_tab":    "2026_LEAVE",
+        # christinan is a shared resource (50% Charging / 50% eCommerce-Portfolio).
+        # Her leave data lives here (Charging), so she must be in this roster so that
+        # reconcile_and_update also updates her eCommerce-Portfolio row via the
+        # shared-resource bypass (any login in SHARED_RESOURCES is updated in ALL
+        # allocation rows where it appears, not just this team's rows).
     },
     {
         "name":         "MyAudi",
@@ -46,6 +59,19 @@ TEAMS = [
         "alloc_key":    "Audi of America.eCommerce-Portfolio",
         "leave_sheet":  "1WqfsdAGI3YSBW6KrxaOOqEHL1gL20-CW9Us7cPl5jPE",
         "leave_tab":    "2026_LEAVE",
+        # Explicit roster: leave sheet name→login mapping
+        # christinan excluded here — she is handled via Charging team (shared resource bypass)
+        "roster": [
+            {"name": "Diego Fernando Benavides Ariza", "login": "diego.ariza",      "loc": "COL - Medellin"},
+            {"name": "Enaile Caldas Rebello",          "login": "enaile.rebello",   "loc": "SP - Sao Paulo"},
+            {"name": "Gabriela Lozano Ospina",         "login": "gabriela.lozano",  "loc": "LIS - Lisbon"},
+            {"name": "Gabriell Silveira Santos",       "login": "gabriellsantos",   "loc": "CPS - Campinas"},
+            {"name": "Miguel Figueroa",                "login": "miguel.figueroa",  "loc": "COL - Medellin"},
+            {"name": "Pedro Henrique Botecchi",        "login": "pbotecchi",        "loc": "CPS - Campinas"},
+            {"name": "Sarah Bizal",                    "login": "sarah.bizal",      "loc": "US"},
+            {"name": "Stephen Boyton",                 "login": "stephen.boynton",  "loc": "US"},
+            {"name": "Tara Gass",                      "login": "tara.gass",        "loc": "US"},
+        ],
     },
     {
         "name":         "Prod_Support",
@@ -58,13 +84,19 @@ TEAMS = [
         "alloc_key":    "Audi of America.Leadership-High_Value",
         "leave_sheet":  "1DZKwHngg7AavyBQ_8SLQMso8Lc4Jpgxf8Fy7R9ReuIo",
         "leave_tab":    "2026_LEAVE",
+        # TODO: leave sheet names (Isabel Graziela, Gustavo Alves Vasconcelos,
+        # Mathews Palumbo, Daniel Medina Cossio, Thiago De Macedo Bartoleti)
+        # do not map to allocation logins (ericav, bruno, jpedretti, hannah.lee,
+        # alex.gass, ben). Add explicit roster once login mapping is confirmed.
+        "skip": True,
     },
 ]
 
-# Shared resources: login → factor per team (applied globally across all teams)
-# If a person appears in N teams, set factor = 1/N
+# Shared resources: login → factor per team (applied globally across all teams).
+# reconcile_and_update updates ALL allocation rows for these logins, not just the
+# current team's rows — so leave data only needs to exist in one team's leave sheet.
 SHARED_RESOURCES = {
-    "christinan": 0.5,   # shared equally between Charging and eCommerce-Portfolio
+    "christinan": 0.5,   # 50% Charging / 50% eCommerce-Portfolio
     "tara.gass":  0.25,  # 25% per team
 }
 
@@ -74,6 +106,7 @@ LOC_MAP = {
     "CO": "COL - Medellin", "COL": "COL - Medellin",
     "CA": "US", "SEA": "SEA - Seattle", "MNL": "MNL - Manila",
     "LIS": "LIS - Lisbon", "TOR": "TOR - Toronto",
+    "ESP": "LIS - Lisbon",  # Spain — using Lisbon business calendar as proxy
 }
 
 MONTH_COL = {1:23,2:24,3:25,4:26,5:27,6:28,7:29,8:30,9:31,10:32,11:33,12:34}
@@ -85,8 +118,6 @@ ORANGE = {"red": 1.0, "green": round(109/255, 6), "blue": round(1/255, 6)}
 
 def get_sheets_service():
     key_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-
-    # Fallback: short-lived OAuth token for testing (set GOOGLE_OAUTH_TOKEN secret)
     oauth_token = os.environ.get("GOOGLE_OAUTH_TOKEN", "").strip()
 
     if key_json:
@@ -212,63 +243,7 @@ def read_allocation(service):
     return read_sheet(service, ALLOCATION_SHEET_ID, ALLOCATION_TAB)
 
 
-def get_person_loc(name, leave_rows, default_loc):
-    for row in leave_rows[1:]:
-        if len(row) > 11 and row[0].strip().lower() == name.lower():
-            code = row[11].strip().upper() if row[11] else ""
-            if code in LOC_MAP:
-                return LOC_MAP[code]
-    return default_loc
-
-
 # ── RECONCILE ────────────────────────────────────────────────────────────────
-
-def reconcile_team(team, alloc_rows, leave_rows, biz_days, holidays, months):
-    """Returns list of updates: {row, col_idx, col_letter, login, month, current, new}"""
-    updates = []
-    alloc_key = team["alloc_key"]
-
-    for i, row in enumerate(alloc_rows):
-        team_val = row[1] if len(row) > 1 else ""
-        if alloc_key not in team_val:
-            continue
-        login = row[7].strip().lower() if len(row) > 7 else ""
-        if not login:
-            continue
-
-        # Find this person's name in leave sheet by login match
-        person_name = None
-        for lr in leave_rows[1:]:
-            if not lr:
-                continue
-            # Try to match by comparing against leave sheet PEOPLE tab would be ideal,
-            # but we match login via allocation col H vs leave sheet name heuristically
-            # We'll resolve name from the leave rows directly
-            pass
-
-        # Get person name from allocation col — not available directly.
-        # We match leave rows by checking if any leave row's name produces this login
-        # via the roster. For now skip rows where we can't resolve name.
-        # Instead, collect names from leave sheet and cross-match.
-        for lr in leave_rows[1:]:
-            if not lr or len(lr) < 8:
-                continue
-            emp_name = lr[0].strip()
-            # Use location from leave sheet col L if available
-            loc_code = lr[11].strip().upper() if len(lr) > 11 and lr[11] else ""
-            loc = LOC_MAP.get(loc_code, "US")
-
-            # Check if this person matches this allocation login
-            # We do this by computing hours and checking against current values
-            # We'll resolve below using a pre-built name→login map per team
-            pass
-
-        # Simpler: build name→login map from leave rows × known roster
-        # This is resolved in main() with the full roster per team
-        break
-
-    return updates
-
 
 def col_letter(n):
     """0-based column index to letter (e.g. 30 → AE)"""
@@ -282,29 +257,31 @@ def col_letter(n):
 
 def reconcile_and_update(service, team, alloc_rows, leave_rows, biz_days, holidays, months, roster):
     """
-    roster: [{name, login, loc, factor}]
-    Returns list of changes applied.
+    roster: [{name, login, loc, factor?}]
+
+    Shared resources (logins in SHARED_RESOURCES) are updated in ALL allocation rows
+    where they appear, regardless of the team's alloc_key — their leave data lives in
+    whichever team's leave_rows is passed here.
     """
     alloc_key = team["alloc_key"]
     changes = []
     value_data = []
     format_requests = []
 
-    # Build login→person map
     login_map = {p["login"].lower(): p for p in roster}
 
     for i, row in enumerate(alloc_rows):
         team_val = row[1] if len(row) > 1 else ""
-        if alloc_key not in team_val:
-            continue
         login = row[7].strip().lower() if len(row) > 7 else ""
         if login not in login_map:
+            continue
+        # Shared resources update ALL rows where they appear.
+        # Regular resources only update rows matching this team's alloc_key.
+        if login not in SHARED_RESOURCES and alloc_key not in team_val:
             continue
 
         person = login_map[login]
         row_num = i + 1  # 1-based
-
-        # Apply shared resource factor if applicable
         factor = SHARED_RESOURCES.get(login, person.get("factor", 1.0))
 
         hours_by_month = calc_person_hours(
@@ -366,17 +343,16 @@ def reconcile_and_update(service, team, alloc_rows, leave_rows, biz_days, holida
 # ── ROSTER BUILDER ────────────────────────────────────────────────────────────
 
 def build_roster_from_leave(leave_rows, alloc_rows, alloc_key):
-    """Build roster by cross-referencing leave sheet names with allocation logins."""
-    # Get all logins for this team from allocation
+    """Auto-build roster by cross-referencing leave sheet names with allocation logins.
+    Requires the leave sheet to have a Location column (col L). If not available,
+    set an explicit 'roster' in the team config instead."""
     team_logins = {}
     for row in alloc_rows:
         if len(row) > 7 and alloc_key in (row[1] if len(row) > 1 else ""):
             login = row[7].strip().lower()
-            role  = row[2].strip() if len(row) > 2 else ""
             if login and login not in team_logins:
-                team_logins[login] = role
+                team_logins[login] = True
 
-    # Get all people names + locations from leave sheet
     leave_people = {}
     for row in leave_rows[1:]:
         if not row or len(row) < 8:
@@ -387,8 +363,6 @@ def build_roster_from_leave(leave_rows, alloc_rows, alloc_key):
         if name and name not in leave_people and loc:
             leave_people[name] = loc
 
-    # Match names to logins: exact login substring match or manual override
-    # We use a fuzzy match: if login appears as substring of name (lowercased, no spaces/dots)
     roster = []
     matched_logins = set()
 
@@ -446,30 +420,35 @@ def main():
     run_date = date.today().strftime("%d/%m/%Y")
     print(f"[{run_date}] Starting finance hours reconciliation...")
 
-    # Determine months to process: current month + remaining months of year
     today = date.today()
     months = list(range(today.month, 13))
 
-    # Auth
     service      = get_sheets_service()
     github_token = get_github_token()
     webhook_url  = get_gchat_webhook()
 
-    # Load biz days
     print("Loading business days from GitHub...")
     wb = download_biz_xlsx(github_token)
     biz_days, holidays = parse_biz_data(wb)
 
-    # Load allocation
     print("Loading allocation sheet...")
     alloc_rows = read_allocation(service)
 
     all_changes = []
 
     for team in TEAMS:
+        if team.get("skip"):
+            print(f"  Skipping {team['name']} (no login mapping configured — see TODO in config).")
+            continue
+
         print(f"Processing {team['name']}...")
         leave_rows = read_sheet(service, team["leave_sheet"], team["leave_tab"])
-        roster = build_roster_from_leave(leave_rows, alloc_rows, team["alloc_key"])
+
+        if "roster" in team:
+            roster = team["roster"]
+            print(f"  Using explicit roster ({len(roster)} people).")
+        else:
+            roster = build_roster_from_leave(leave_rows, alloc_rows, team["alloc_key"])
 
         if not roster:
             print(f"  No roster found for {team['name']}, skipping.")
@@ -482,7 +461,6 @@ def main():
         print(f"  {len(changes)} updates applied.")
         all_changes.extend(changes)
 
-    # Send GChat summary
     print("Sending GChat notification...")
     send_gchat(webhook_url, all_changes, run_date)
     print(f"Done. {len(all_changes)} total updates.")
