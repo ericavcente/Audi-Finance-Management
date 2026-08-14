@@ -61,6 +61,13 @@ TEAMS = [
     },
 ]
 
+# Shared resources: login → factor per team (applied globally across all teams)
+# If a person appears in N teams, set factor = 1/N
+SHARED_RESOURCES = {
+    "christinan": 0.5,   # shared equally between Charging and eCommerce-Portfolio
+    "tara.gass":  0.25,  # 25% per team
+}
+
 LOC_MAP = {
     "CPS": "CPS - Campinas", "SP": "SP - Sao Paulo",
     "BH": "BH - Belo Horizonte", "US": "US",
@@ -297,9 +304,12 @@ def reconcile_and_update(service, team, alloc_rows, leave_rows, biz_days, holida
         person = login_map[login]
         row_num = i + 1  # 1-based
 
+        # Apply shared resource factor if applicable
+        factor = SHARED_RESOURCES.get(login, person.get("factor", 1.0))
+
         hours_by_month = calc_person_hours(
             person["name"], person["loc"], leave_rows,
-            biz_days, holidays, months, person.get("factor", 1.0)
+            biz_days, holidays, months, factor
         )
 
         for m in months:
