@@ -318,8 +318,11 @@ def reconcile_and_update(service, team, alloc_rows, leave_rows, biz_days, holida
                     "fields": "userEnteredFormat(textFormat)",
                 }
             })
+            # For shared resources the row may belong to a different team than the
+            # one being processed — capture the actual alloc label from the row.
+            row_label = team_val.split(".")[-1] if "." in team_val else team["name"]
             changes.append({
-                "team": team["name"], "login": login,
+                "team": team["name"], "row_team": row_label, "login": login,
                 "row": row_num, "month": m,
                 "col": col_letter(col_idx),
                 "old": current, "new": calc_val,
@@ -390,9 +393,12 @@ def send_gchat(webhook_url, all_changes, run_date):
         msg = f"✅ *Finance Hours — {run_date}*\nNenhuma divergência encontrada em todos os times."
     else:
         lines = [f"📊 *Finance Hours Reconciliation — {run_date}*\n"]
+        # Group by actual allocation row team (row_team), not processing team.
+        # This ensures shared resources (e.g. tara.gass) show up under the
+        # correct team section rather than all lumped under the processing team.
         by_team = {}
         for c in all_changes:
-            by_team.setdefault(c["team"], []).append(c)
+            by_team.setdefault(c.get("row_team", c["team"]), []).append(c)
 
         month_names = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",
                        7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
@@ -468,3 +474,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
