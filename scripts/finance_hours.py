@@ -152,6 +152,17 @@ def get_gchat_webhook():
 
 # ── BIZ DAYS ─────────────────────────────────────────────────────────────────
 
+def inspect_biz_hours_tab(service):
+    """Print first 40 rows of the '2026 Biz hours' tab for structure discovery."""
+    try:
+        rows = read_sheet(service, ALLOCATION_SHEET_ID, "2026 Biz hours")
+        print(f"[DEBUG] '2026 Biz hours' tab — {len(rows)} rows total")
+        for i, r in enumerate(rows[:40]):
+            print(f"  row {i+1}: {r}")
+    except Exception as e:
+        print(f"[DEBUG] Could not read '2026 Biz hours' tab: {e}")
+
+
 def download_biz_xlsx(github_token):
     import openpyxl
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE.replace(' ', '%20')}"
@@ -433,6 +444,10 @@ def main():
     github_token = get_github_token()
     webhook_url  = get_gchat_webhook()
 
+    # One-time inspection: print structure of '2026 Biz hours' tab so we can
+    # replace the xlsx dependency with a direct Sheet read.
+    inspect_biz_hours_tab(service)
+
     print("Loading business days from GitHub...")
     wb = download_biz_xlsx(github_token)
     biz_days, holidays = parse_biz_data(wb)
@@ -474,4 +489,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
