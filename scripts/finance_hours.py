@@ -6,6 +6,7 @@ Runs every Wednesday — compares vacation leave with Allocation sheet and updat
 import os
 import json
 import base64
+import time
 import requests
 from datetime import datetime, timedelta, date
 from google.oauth2 import service_account
@@ -246,12 +247,21 @@ def calc_person_hours(name, loc, leave_rows, biz_days, holidays, months, factor=
 
 # ── SHEETS HELPERS ───────────────────────────────────────────────────────────
 
-def read_sheet(service, sheet_id, tab):
-    result = service.spreadsheets().values().get(
-        spreadsheetId=sheet_id,
-        range=tab
-    ).execute()
-    return result.get("values", [])
+def read_sheet(service, sheet_id, tab, retries=3):
+    for attempt in range(retries):
+        try:
+            result = service.spreadsheets().values().get(
+                spreadsheetId=sheet_id,
+                range=tab
+            ).execute()
+            return result.get("values", [])
+        except Exception as e:
+            if attempt < retries - 1 and ("503" in str(e) or "429" in str(e) or "500" in str(e)):
+                wait = 2 ** attempt
+                print(f"  [RETRY] {tab}: {e} — retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
 
 
 def read_allocation(service):
@@ -487,6 +497,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
