@@ -6,7 +6,6 @@ Runs every Wednesday — compares vacation leave with Allocation sheet and updat
 import os
 import json
 import base64
-import tempfile
 import requests
 from datetime import datetime, timedelta, date
 from google.oauth2 import service_account
@@ -17,8 +16,7 @@ from googleapiclient.discovery import build
 ALLOCATION_SHEET_ID  = "1LIbxO1gpQVX-QDRQXUfS497eX0aFT8t1YtxYCs4lx9k"
 ALLOCATION_TAB       = "Allocation- changes PROHIBITED!!!"
 ALLOCATION_SHEET_NUM = 2120159953
-GITHUB_REPO          = "samciandt/Finance"
-GITHUB_FILE          = "2026 Biz hours.xlsx"
+BIZ_HOURS_TAB        = "2026 Biz hours"
 TARGET_YEAR          = 2026
 VALID_STATUS         = {"approved", "requested", "intention"}
 
@@ -152,53 +150,59 @@ def get_gchat_webhook():
 
 # ── BIZ DAYS ─────────────────────────────────────────────────────────────────
 
-def inspect_biz_hours_tab(service):
-    """Print first 40 rows of the '2026 Biz hours' tab for structure discovery."""
-    try:
-        rows = read_sheet(service, ALLOCATION_SHEET_ID, "2026 Biz hours")
-        print(f"[DEBUG] '2026 Biz hours' tab — {len(rows)} rows total")
-        for i, r in enumerate(rows[:40]):
-            print(f"  row {i+1}: {r}")
-    except Exception as e:
-        print(f"[DEBUG] Could not read '2026 Biz hours' tab: {e}")
+# Maps row-label prefix in '2026 Biz hours' tab → location key used in biz_days dict
+# (must match the values in LOC_MAP so calc_person_hours looks up the right entry)
+_SHEET_LOC_MAP = {
+    "CPS":  "CPS - Campinas",
+    "US":   "US",
+    "CO":   "COL - Medellin",
+    "CA":   "TOR - Toronto",
+    "SP":   "SP - Sao Paulo",
+    "BH":   "BH - Belo Horizonte",
+    "CTB":  "CWB - Curitiba",
+    "PT":   "LIS - Lisbon",
+    "PHI":  "MNL - Manila",
+}
 
 
-def download_biz_xlsx(github_token):
-    import openpyxl
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE.replace(' ', '%20')}"
-    resp = requests.get(url, headers={"Authorization": f"Bearer {github_token}"})
-    resp.raise_for_status()
-    content = resp.json()["content"].replace("\n", "").replace("\r", "").replace(" ", "")
-    data = base64.b64decode(content)
-    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
-    tmp.write(data)
-    tmp.close()
-    return openpyxl.load_workbook(tmp.name, data_only=True)
+def read_biz_hours_from_sheet(service):
+    """Read business days per location/month from the '2026 Biz hours' tab.
 
-
-def parse_biz_data(wb):
+    Returns (biz_days, holidays) where:
+      biz_days[loc_name][month] = working days (int, already excludes holidays)
+      holidays = {}  — not needed since the tab values already account for them
+    """
+    rows = read_sheet(service, ALLOCATION_SHEET_ID, BIZ_HOURS_TAB)
     biz_days = {}
-    holidays = {}
-    for loc in wb.sheetnames:
-        ws = wb[loc]
-        hols, in_summary = [], False
-        biz_days[loc] = {}
-        month_map = {"Jan":1,"Feb":2,"Mar":3,"Apr":4,"May":5,"Jun":6,
-                     "Jul":7,"Aug":8,"Sep":9,"Oct":10,"Nov":11,"Dec":12}
-        for row in ws.iter_rows(values_only=True):
-            if row[0] == "Monthly Business Hours Summary":
-                in_summary = True
-                continue
-            if in_summary and row[0] in month_map:
-                biz_days[loc][month_map[row[0]]] = row[3]
-            if not in_summary and isinstance(row[0], str) and "/" in row[0]:
-                try:
-                    d = datetime.strptime(row[0], "%m/%d/%Y")
-                    hols.append(d.strftime("%Y-%m-%d"))
-                except:
-                    pass
-        holidays[loc] = hols
-    return biz_days, holidays
+
+    for row in rows:
+        if not row:
+            continue
+        label = row[0].strip()
+        label_lower = label.lower()
+
+        for prefix, loc_name in _SHEET_LOC_MAP.items():
+            if (label_lower.startswith(prefix.lower())
+                    and ("biz days" in label_lower or "biz hours" in label_lower)):
+                month_days = {}
+                for m in range(1, 13):
+                    try:
+                        month_days[m] = int(row[m]) if row[m] else 0
+                    except (IndexError, ValueError):
+                        month_days[m] = 0
+                biz_days[loc_name] = month_days
+                break
+
+    # SEA - Seattle has no dedicated row; use US calendar as proxy
+    if "US" in biz_days and "SEA - Seattle" not in biz_days:
+        biz_days["SEA - Seattle"] = biz_days["US"]
+
+    missing = [v for v in LOC_MAP.values() if v not in biz_days]
+    if missing:
+        print(f"[WARN] No biz-days data for locations: {missing}")
+
+    print(f"  Loaded biz days for: {sorted(biz_days)}")
+    return biz_days, {}
 
 
 # ── LEAVE CALCULATION ────────────────────────────────────────────────────────
@@ -440,17 +444,11 @@ def main():
     today = date.today()
     months = list(range(today.month, 13))
 
-    service      = get_sheets_service()
-    github_token = get_github_token()
-    webhook_url  = get_gchat_webhook()
+    service     = get_sheets_service()
+    webhook_url = get_gchat_webhook()
 
-    # One-time inspection: print structure of '2026 Biz hours' tab so we can
-    # replace the xlsx dependency with a direct Sheet read.
-    inspect_biz_hours_tab(service)
-
-    print("Loading business days from GitHub...")
-    wb = download_biz_xlsx(github_token)
-    biz_days, holidays = parse_biz_data(wb)
+    print("Loading business days from '2026 Biz hours' tab...")
+    biz_days, holidays = read_biz_hours_from_sheet(service)
 
     print("Loading allocation sheet...")
     alloc_rows = read_allocation(service)
@@ -489,5 +487,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
