@@ -307,7 +307,15 @@ def reconcile_and_update(service, team, alloc_rows, leave_rows, biz_days, holida
 
         person = login_map[login]
         row_num = i + 1  # 1-based
-        factor = SHARED_RESOURCES.get(login, person.get("factor", 1.0))
+        # Read alloc% from col F of the allocation row.
+        # SHARED_RESOURCES factor takes priority (cross-team split is explicit);
+        # for everyone else, scale hours by their allocation % so the spreadsheet
+        # vacation-value formula (biz_hrs × alloc% − worked_hrs) × rate stays positive.
+        try:
+            alloc_pct = float(row[5]) if len(row) > 5 and row[5] else 1.0
+        except (ValueError, TypeError):
+            alloc_pct = 1.0
+        factor = SHARED_RESOURCES.get(login, alloc_pct)
 
         hours_by_month = calc_person_hours(
             person["name"], person["loc"], leave_rows,
