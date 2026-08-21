@@ -334,6 +334,8 @@ def reconcile_and_update(service, team, alloc_rows, leave_rows, biz_days, holida
         for m in months:
             col_idx = MONTH_COL[m]
             current = int(row[col_idx]) if len(row) > col_idx and str(row[col_idx]).lstrip("-").isdigit() else 0
+            if current == 0:
+                continue  # 0 means no allocation on this row for this month — skip
             calc_val = hours_by_month[m]
             if current == calc_val:
                 continue
