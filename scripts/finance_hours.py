@@ -130,9 +130,19 @@ def get_sheets_service():
             print(f"[WARN] Service account auth failed: {e}")
 
     if oauth_token:
-        from google.oauth2.credentials import Credentials as OAuthCreds
-        creds = OAuthCreds(token=oauth_token)
-        return build("sheets", "v4", credentials=creds, cache_discovery=False)
+        # Build an httplib2 Http object with the bearer token pre-injected.
+        # This bypasses google-auth's refresh logic entirely — short-lived
+        # OAuth access tokens have no refresh_token, so any refresh attempt fails.
+        import httplib2
+
+        class _BearerHttp(httplib2.Http):
+            def request(self, uri, method="GET", body=None, headers=None, **kw):
+                if headers is None:
+                    headers = {}
+                headers["Authorization"] = f"Bearer {oauth_token}"
+                return super().request(uri, method=method, body=body, headers=headers, **kw)
+
+        return build("sheets", "v4", http=_BearerHttp(), cache_discovery=False)
 
     raise RuntimeError(
         "No valid Google credentials found.\n"
